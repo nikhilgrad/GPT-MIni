@@ -1,6 +1,6 @@
 # GPT-Mini
 
-**Skills learnt and applied** - Pytorch, Encoding & Decoding Text handling, Transformer Architecture, Self-Attention Layer, Feed-Forward Neural Network,   .
+**Skills learnt and applied** - Pytorch, Encoding & Decoding, Text handling, Transformer Architecture, Self-Attention Layer, Feed-Forward Neural Network.
 
 ## Idea 
 This is a basic version of a GPT (Generative Pretrained Transformer) model. It is based on the same **Transformer Architecture**, which consists of a **Self-Attention Layer** and a **Feed-Forward Neural Network**. It was pretrained to generate text autoregressively, meaning it generates one token at a time based on the previously generated tokens.
