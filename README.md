@@ -164,8 +164,20 @@ train_data = data[:n]
 val_data = data[n:]
 ```
 
+## Generating Data Batches
 
+Since we have created encoder-decoder architecture we need to create a function that splits our data in small batches of `data`, checks or takes as input the first integer from this batch and prints out the next integer as output. We need this to make our model learn which integer is followed by which integer. These integers are nothing but strings from our `data` that are converted to integers by using `stoi` dictionary. So by being able to learn which integer follows which one our model is actually learning which string is following which one. This learning will let the model to predcit strings autoregressively i.e the model will generate one token at a time based on previously generated tokens. 
 
+```
+def get_batch(split):
+    data = train_data if split == 'train' else val_data
+    ix = torch.randint(len(data) - block_size, (batch_size,))
+    x = torch.stack([data[i:i+block_size] for i in ix])
+    y = torch.stack([data[i+1:i+block_size+1] for i in ix])
+    return x, y
+```
+
+In the above code snippet, first we choose between `train_data` and `val_data` using the split parameter of function `get_batch`. Then we generate the random starting index for the batches of size `batch_size`.
 
 
 
