@@ -1,6 +1,6 @@
-# GPT-Mini
+# GPT-Mini from Scratch
 
-**Skills learnt and applied** - Pytorch, Encoding & Decoding, Text handling, Transformer Architecture, Self-Attention Layer, Feed-Forward Neural Network.
+**Skills learnt and applied** - Pytorch, Encoder-Decoder Architecture, Text handling, Transformer Architecture, Self-Attention & Multi-head Attention Layer, Feed-Forward Neural Network.
 
 ## Idea 
 This is a basic version of a GPT (Generative Pretrained Transformer) model. It is based on the same **Transformer Architecture**, which consists of a **Self-Attention Layer** and a **Feed-Forward Neural Network**. It was pretrained to generate text autoregressively, meaning it generates one token at a time based on the previously generated tokens.
@@ -174,10 +174,40 @@ def get_batch(split):
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([data[i:i+block_size] for i in ix])
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
+    x, y = x.to(device), y.to(device)
     return x, y
 ```
 
-In the above code snippet, first we choose between `train_data` and `val_data` using the split parameter of function `get_batch`. Then we generate the random starting index for the batches of size `batch_size`.
+In the above code snippet, first we choose between `train_data` and `val_data` using the split parameter of function `get_batch`. Then we generate the random starting index for the batches of size `batch_size`.Then it stacks slices of data in input `x` and target `y` and sends them to the device that is specified.
+
+## Function to compute average model loss on training and validation dataset
+
+So we will create a function `estimate_loss` to evaluate the performance of our model on the training and validation dataset. We need this for montioring the model's performance during training. We will do this by calculating the average loss over many iterations.
+
+```
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
+```
+
+`@torch.no_grad()` is a decorator that disables the gradient calculation which decreases the memory usage and helps in speeding up the computations. We used it as in our evaluation there is no need for gradients. Then we initialize a dictionary for the output and set our model to `eval` mode which acts differently during the training and validation phase and affects the dropout and batch normalization layers. We loop over both the training and validation set and initialize our loss tensor which will store the loss values for each evaluation iteration. We then loop through each iteration and during each iteration we get our `X`, `Y` from the `get_batch` function, we also compute the predictions(`logits`) and losses of our model, and store the loss value in the `losses` tensor. Then outside of the evaluation loop we compute the average loss over all iterations and keep it in our `out` dictionary. At the end we set the model to training mode.
+
+## Attention is All You Need
+Self-attention layer allows the model to weigh the importance of different words in a sequence relative to each other. This is how the model knows which next word is to be printed as many words can come after the given word. So this importance helps the GPT to know the context of each word in the sequence by considering its relationship with other words. It does this by transforming each word in the sequence into 3 vectors **Query(Q), Key(K) & Value(V)**. 
+
+
+
+
 
 
 
