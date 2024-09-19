@@ -1,4 +1,4 @@
-# GPT-Mini from Scratch
+# GPT from Scratch
 
 **Skills learnt and applied** - Pytorch, Encoder-Decoder Architecture, Text handling, Transformer Architecture, Self-Attention & Multi-head Attention Layer, Feed-Forward Neural Network.
 
