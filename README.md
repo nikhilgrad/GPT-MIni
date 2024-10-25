@@ -203,12 +203,216 @@ def estimate_loss():
 `@torch.no_grad()` is a decorator that disables the gradient calculation which decreases the memory usage and helps in speeding up the computations. We used it as in our evaluation there is no need for gradients. Then we initialize a dictionary for the output and set our model to `eval` mode which acts differently during the training and validation phase and affects the dropout and batch normalization layers. We loop over both the training and validation set and initialize our loss tensor which will store the loss values for each evaluation iteration. We then loop through each iteration and during each iteration we get our `X`, `Y` from the `get_batch` function, we also compute the predictions(`logits`) and losses of our model, and store the loss value in the `losses` tensor. Then outside of the evaluation loop we compute the average loss over all iterations and keep it in our `out` dictionary. At the end we set the model to training mode.
 
 ## Attention is All You Need
-Self-attention layer allows the model to weigh the importance of different words in a sequence relative to each other. This is how the model knows which word is to be printed next, as many words can come after the given word. So this importance helps the GPT to know the context of each word in the sequence by considering its relationship with other words. It does this by transforming each word in the sequence into 3 vectors **Query(Q), Key(K) & Value(V)**. These 3 vectors are obtained by first converting each word into an embedding vector and then calculating the dot product of this embedding vector with 3 different sets of learned weight matrices, namely WQ, WK and WV. Query represents what the current word is looking for in other words, Key represents the characteristics of each word that can be matched against the Query and Value represents the actual information of each word that will be used to compute the final output. The dot products of Query and key are multiplied together and scaled by the square root of dimension of key vectors as this stabilizes the gradients. Then softmax function is applied to this scaled scores in order to convert them into probabilities as this will make their sum to be 1 which will make them easier to be interpreted as weights. This weights that is obtained is what we call an attention score and this is where the whole mechanism gets its name as the **Attention Layer**. This attention scores or weights are then used to compute the weighted sum of the Value vectors which is the final output for each word. 
+Self-attention layer allows the model to weigh the importance of different words in a sequence relative to each other. This is how the model knows which word is to be printed next, from the many words that can come after the given word. So this importance helps the GPT to know the context of each word in the sequence by considering its relationship with other words. It does this by transforming each word in the sequence into 3 vectors **Query(Q), Key(K) & Value(V)**. These 3 vectors are obtained by first converting each word into an embedding vector and then calculating the dot product of this embedding vector with 3 different sets of learned weight matrices, namely WQ, WK and WV. Query represents what the current word is looking for in other words, Key represents the characteristics of each word that can be matched against the Query and Value represents the actual information of each word that will be used to compute the final output. The dot products of Query and key are multiplied together and scaled by the square root of dimension of key vectors as this stabilizes the gradients. Then softmax function is applied to this scaled scores in order to convert them into probabilities as this will make their sum to be 1 which will make them easier to be interpreted as weights. This weights that is obtained is what we call an attention score and this is where the whole mechanism gets its name as the **Attention Layer**. This attention scores or weights are then used to compute the weighted sum of the Value vectors which is the final output for each word. 
 
+![self-attention_layer](https://github.com/user-attachments/assets/813723cb-adb3-4a94-bf8c-0ca6aa09af6c)
 
+*A Self-attention head is shown in the above picture*
 
+### Self-attention head
+Now we will create one self-attention layer also called as one Head as it represents a single attention mechanism in a multi-attention mechanism where multiple such heads will be present. It is called as **self-attention** because the keys and values are produced from the same source as queries. For this purpose we will create a class which will transform our input embeddings into Key, Query and Value vectors and then carry out the computation of attention scores and find the value vectors using attention weights.
 
+```
+class Head(nn.Module):
+    """ one head of self-attention """
 
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(n_embd, head_size, bias=False)
+        self.query = nn.Linear(n_embd, head_size, bias=False)
+        self.value = nn.Linear(n_embd, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        B,T,C = x.shape
+        k = self.key(x)   # (B,T,C)
+        q = self.query(x) # (B,T,C)
+        # compute attention scores
+        wei = q @ k.transpose(-2,-1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
+        wei = F.softmax(wei, dim=-1) # (B, T, T)
+        wei = self.dropout(wei)
+        # perform the weighted aggregation of the values
+        v = self.value(x) # (B,T,C)
+        out = wei @ v # (B, T, T) @ (B, T, C) -> (B, T, C)
+        return out
+```
+
+The class `Head` inherits from `nn.module` which is the pytorch neural network module. Using this module we create 3 linear layers (`self.key`, `self.query`, `self.value` ) for transforming the input embeddings into Key, Query and Value vectors respectively. `tril` represents the lower triangular matrix which ensures that the model cannot see the future tokens when predicting the current tokens. As this block here is a **decoder** attention block which is used in autoregressive settings we can convert it to an **encoder** attention block by just deleting this single line that does the masking with `tril` allowing all tokens to communicate. It does this by masking the future positions in the sequence. A dropout layer is used to prevent the overfitting by randomly setting some attention weights to zero during training. The input `x` has the shape (B,T,C) where B is the batch size, C is the sequence length and C is the number of features i.e. embedding dimension. Using the previously created linear layers we transform the input `x` into query, key and value vectors. Attention scores are computed by taking dot product and scaling it. This results in a matrix of shape (B,T,T) where each element represents the attention score between 2 positions in the sequence. Then we mask it by setting attention scores to `-inf`, which ensures that the model only attends to previous and current positions. The masked attention score is then passed through a softmax function to obtain weights and dropout is applied. This is then used to compute the final output by multiplying with value vectors.
+
+### Multi-Head Attention
+As we have already created a single attention layer head now let's create multiple such heads that will be working in parallel for better performance.
+
+![multi-head_attention_layer](https://github.com/user-attachments/assets/f4a9e428-8142-41a0-9959-8f5b5d65d6a8)
+
+*Multi-Head Attention layer*
+
+For this we create a class which again inherits from the pytorch `nn.module` neural network module representing the multi-head mechanism used in Transformer models.
+
+```
+class MultiHeadAttention(nn.Module):
+    """ multiple heads of self-attention in parallel """
+
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(n_embd, n_embd)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.dropout(self.proj(out))
+        return out
+```
+
+`self.heads` is a list of `Head` instances, each representing a single head of self-attention. `self.proj` is a linear layer that projects the concatenated outputs of all attention heads back to the original embedding dimension (`n_embd`). The input `x` is passed through each attention head in `self.heads` using a list comprehension. The outputs of all attention heads are concatenated along the last dimension `dim=-1` which is then passed through the projection layer `self.proj` to map it to original embedding dimension `n_embd`.
+
+```
+class FeedFoward(nn.Module):
+    """ a simple linear layer followed by a non-linearity """
+
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+class Block(nn.Module):
+    """ Transformer block: communication followed by computation """
+
+    def __init__(self, n_embd, n_head):
+        # n_embd: embedding dimension, n_head: the number of heads we'd like
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedFoward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
+    def forward(self, x):
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
+```
+
+The above defined classes are just a simple feedforward network and a single transformer block that contains a muli-head attention followed by the feedforward network. `self.ln1` and `self.ln2` are layer normalization layers for stabilizing and accelerating the training. In this the `forward` function is used to create residual connections as this helps in training deeper networks and solving the problem of vanishing gradients. This is done again for feedforward network. 
+
+### Bigram Language model
+This is be the last class we have to make and this would be a simple language model that predicts the next token in a sequence based on current context. This class will also  be an inheritance from Pytorch neural network module. 
+
+```
+class BigramLanguageModel(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        # each token directly reads off the logits for the next token from a lookup table
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd) # final layer norm
+        self.lm_head = nn.Linear(n_embd, vocab_size)
+
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+
+        # idx and targets are both (B,T) tensor of integers
+        tok_emb = self.token_embedding_table(idx) # (B,T,C)
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
+        x = tok_emb + pos_emb # (B,T,C)
+        x = self.blocks(x) # (B,T,C)
+        x = self.ln_f(x) # (B,T,C)
+        logits = self.lm_head(x) # (B,T,vocab_size)
+
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            logits = logits.view(B*T, C)
+            targets = targets.view(B*T)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+    def generate(self, idx, max_new_tokens):
+        # idx is (B, T) array of indices in the current context
+        for _ in range(max_new_tokens):
+            # crop idx to the last block_size tokens
+            idx_cond = idx[:, -block_size:]
+            # get the predictions
+            logits, loss = self(idx_cond)
+            # focus only on the last time step
+            logits = logits[:, -1, :] # becomes (B, C)
+            # apply softmax to get probabilities
+            probs = F.softmax(logits, dim=-1) # (B, C)
+            # sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
+            # append sampled index to the running sequence
+            idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
+        return idx
+```
+
+It maps each token in the vocabulary to an embedding vector and provides positional information to the model by mapping each position in the sequence to an embedding vector. `self.blocks` is a sequence of `Block` instances, each of which contains a multi-head self-attention mechanism and feedforward network. Then applies final layer normalization and maps the final embeddings to vocabulary size producing logits for each token in the vocabulary forward function takes an input of shape (B,T) where B is batch size and T is sequence length. Initialize token embeddings and psoitional embeddings as `tok_emb` and `pos_emb` respectively, which are then summed to form the input and passed through transformer blocks. This are then normalized and passed through the linear layer to produce logits (logits are direct outputs from final layer that haven't been transformed into probabilities). Then we define a function `generate` that generates new tokens based on the current context by iteratively predicting and sampling the next token.
+
+```
+model = BigramLanguageModel()
+m = model.to(device)
+# print the number of parameters in the model
+print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
+
+# create a PyTorch optimizer
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+
+for iter in range(max_iters):
+
+    # every once in a while evaluate the loss on train and val sets
+    if iter % eval_interval == 0 or iter == max_iters - 1:
+        losses = estimate_loss()
+        print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+
+    # sample a batch of data
+    xb, yb = get_batch('train')
+
+    # evaluate the loss
+    logits, loss = model(xb, yb)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    optimizer.step
+```
+
+The above code snippet initializes and trains the `BigramLanguageModel` using a standard training loop and also evaluates the loss. It samples data, computes gradients and updates the model parameters. 
+
+Finally we generate the model, calling the `generate` method of the model and `decode` function.
+
+```
+# generate from the model
+context = torch.zeros((1, 1), dtype=torch.long, device=device)
+print(decode(m.generate(context, max_new_tokens=10000)[0].tolist()))
+```
+
+This will print the output i.e. the generated tokens according to number of tokens specified by `max_new_tokens`. 
+
+The following is the output obtained after training for 5000 steps.
+
+**Output**
+```
+SECTION LIII
+
+Vaipaudeva said, "Indeed, then, knew by What, O Duryodhana, plaughtere foes with both nisted injuge and profit of the whole objects. In what the Suta's son of the earth whetter is he is Citrana.'"
+
+SECTION XVI
+
+"Hearing many wifal unto one that abound with irresible at these the gods. O bull thou canting interrofal and be incovered by me. What be what what I know are got and the grant and complexion. Griet shill, that bulls thou shall ever constly, Opinerce one, forwarth, when now blossed by the means of my advancing Ashtavathama, Thas are very rend roars of gold closse, immovable proceeds, the king to Dusasana have (been by the rays of the bodies), and other, with sharp be combated and righteousness of arrows. Armed with strength and effects in retror fire in the track race. And these excellent cannot fear from his enembled its wrongs and children sended thou shouts me he influence with even he hard. Those deity to be, heard these weapons do now, in one limps of husbulilary. The mighty bestowing those thus kingdom from onten the fiery delight of his deer-imper disragrection. Do thou a tattribute to doing addressed with weapons forsament so behold and swalled by the man-bodies and monkey and homage, of her snake, (ex-remeply) dog. The all about of duni, let thy slaughter me. Give, have cut off hard bour performing savat, tell me!'
+```
+
+We can match the output with original file and see that the way of writing and also mentioning of the section numbers is similar to the original file which means the model has learnt the semantics from the document but we can see that the output is not meaningful which means to understand the general grammar, complexities of language and form meaningful sentences it needs more training and even more data. So we have achieved our goal of building a transformer decoder architecture, trained it on our own data and also successfully predicted the learnt output which follows the semantics of original epic. 
 
 
 
